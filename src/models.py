@@ -13,6 +13,7 @@ ParameterType = Literal[
 
 def validate_blank(cont: str) -> str:
     """
+
     Validates whether the checked content is empty or contains only spaces.
 
     Returns:
@@ -33,8 +34,8 @@ class TypeDefinition(BaseModel):
         is not declared in the class
 
     description = does not validate anything, it only serves as documentation
-
     """
+
     model_config = ConfigDict(extra="forbid")
 
     type: ParameterType = Field(..., description="The data type")
@@ -42,7 +43,9 @@ class TypeDefinition(BaseModel):
 
 class FunctionDefinition(BaseModel):
     """
+
     Represent a function available for the language model
+
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -61,7 +64,9 @@ class FunctionDefinition(BaseModel):
                            cls, cont: dict[str, TypeDefinition]
                           ) -> dict[str, TypeDefinition]:
         """
+
         Exactly the same check as before, but for the content of parameters
+
         """
         for parameter_name in cont:
             if not parameter_name.strip():
@@ -74,7 +79,9 @@ class FunctionDefinition(BaseModel):
 
 class PromptInput(BaseModel):
     """
+
     Represent one natural-language input prompt
+
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -18,7 +18,7 @@ class ConstrainedDecoder:
             input_ids: list[int],
             generated: str,
             is_valid: Callable[[str, str], bool]
-    ) -> tuple[int, str]:
+                         ) -> tuple[int, str]:
         """
 
         esse metodo escolhe o token com maior logit para ser o proximo
@@ -81,8 +81,7 @@ class ConstrainedDecoder:
             t_id, t_text = self.choose_next_token(
                 cur_ids,
                 generated,
-                is_valid,
-            )
+                is_valid)
 
             cur_ids.append(t_id)
             generated += t_text
@@ -93,7 +92,7 @@ class ConstrainedDecoder:
         return generated
 
 
-def choose_func_name(
+def choose_func(
         decoder: ConstrainedDecoder,
         prompt: str,
         functions: list[FunctionDefinition],
@@ -110,6 +109,7 @@ def choose_func_name(
     if not func_names:
         raise ValueError("No functions available")
 
+#    print(prompt)
     input_ids = decoder.model.encode(prompt)[0].tolist()
 
     def is_valid(genereted: str, t_next: str) -> bool:
