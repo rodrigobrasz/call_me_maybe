@@ -21,9 +21,15 @@ Estrutura do Projeto
     └── errors.py         # erros personalizados
 
 
-greedy decoding -> PESQUISAR
+---
+coisas que tive que relembrar de como funcionam:
+
+key lambda:
+- https://www.w3schools.com/python/ref_keyword_lambda.asp
+- https://www.youtube.com/watch?v=HQNiSfb795A
 
 
+---
 More about pydantic:
 - https://pydantic.dev/docs/validation/dev/concepts/fields/
 - https://www.youtube.com/watch?v=FcWdzqCpj5c

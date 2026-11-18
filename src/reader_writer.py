@@ -2,16 +2,21 @@ import json
 
 from pathlib import Path
 from typing import Any
-
 from pydantic import ValidationError
-from .models import PromptInput, FunctionDefinition
-from .errors import InputFileError
+from .models import PromptInput, FunctionDefinition, FunctionResult
+import sys
+
+
+class InputFileError(Exception):
+    pass
 
 
 def load_json(path: Path) -> Any:
     """
     Carrego o ficheiro passado como parametro e tento abri-lo
     verificando alguns erros.
+
+    json.load: transorma o json em seu respectvio objeto python:
     """
 
     try:
@@ -35,10 +40,10 @@ def load_json(path: Path) -> Any:
 def load_functions(path: Path) -> list[FunctionDefinition]:
     """
     Esse metodo eu estou carregando as funcoes do arquivo json
-    enviado em "path"
     """
+
+    # só falo o load do json para o python
     function_data = load_json(path)
-    # colocar um try para verificar se esse caminho existe
 
     if not isinstance(function_data, list):
         raise InputFileError(
@@ -85,3 +90,17 @@ def load_prompts(path: Path) -> list[PromptInput]:
 
         prompts.append(prompt)
     return prompts
+
+
+def save_results(results: list[FunctionResult], path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(
+                [r.model_dump() for r in results],
+                f,
+                indent=2,
+            )
+    except OSError as e:
+        print(f"Error cannot write {path}: {e}")
+        sys.exit(1)

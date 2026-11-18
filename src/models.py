@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
+from typing import Any
 
 ParameterType = Literal[
     "string",
@@ -68,6 +69,7 @@ class FunctionDefinition(BaseModel):
         Exactly the same check as before, but for the content of parameters
 
         """
+
         for parameter_name in cont:
             if not parameter_name.strip():
                 raise ValueError(
@@ -90,3 +92,15 @@ class PromptInput(BaseModel):
                         description="The natural language prompt")
 
     validate_prompt = field_validator("prompt")(validate_blank)
+
+
+class FunctionResult(BaseModel):
+    """
+    ...
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str
+    name: str
+    parameters: dict[str, Any]
