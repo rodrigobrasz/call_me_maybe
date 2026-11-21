@@ -4,14 +4,115 @@ from .models import FunctionDefinition
 from llm_sdk import Small_LLM_Model
 from typing import Any
 from .vocabulary import Vocabulary
-import json
+import torch
 
 
 class ConstrainedDecoder:
+    NUMBER_CHAR = set("0123456789.- ")
+
     def __init__(self, model: Small_LLM_Model) -> None:
         self.model = model
         self.vocabulary = Vocabulary(
             model.get_path_to_vocab_file()
+        )
+        self.mask_creator()
+
+    def constrained_decode(self, ids: list[int]) -> str:
+        return (self.model.decode(ids))
+
+    def constrained_encode(self, text: str) -> list[int]:
+        return (self.model.encode(text)[0].tolist())
+
+    def gen_logit_ids(self, input_ids: list[int]) -> list[float]:
+        return self.model.get_logits_from_input_ids(input_ids)
+
+    @staticmethod
+    def make_mask(ids: list[int], size: int) -> torch.Tensor:
+        mask = torch.full((size,), float("-inf"))
+        mask[list(ids)] = 0.0
+        return mask
+
+    def mask_creator(self) -> None:
+        vocab = self.gen_logit_ids(self.constrained_encode("a"))
+        size = len(vocab)
+
+        number_id: set[int] = set()
+        number_stop: set[int] = set()
+        string_ids: set[int] = set()
+        string_stop: set[int] = set()
+
+        for token_id, txt in self.vocabulary.id_to_str.items():
+            if not txt:
+                continue
+
+            if set(txt) <= self.NUMBER_CHAR:
+                number_id.add(token_id)
+            if txt.lstrip()[:1] in (",", "}"):
+                number_stop.add(token_id)
+
+            if '"' in txt:
+                string_stop.add(token_id)
+            elif "\n" not in txt:
+                string_ids.add(token_id)
+
+        self._number_stop = number_stop
+        self._string_stop = string_stop
+
+        self.m_number = self.make_mask(number_id | number_stop, size)
+        self.m_number_nstop = self.make_mask(number_id, size)
+        self.m_string = self.make_mask(string_ids | string_stop, size)
+        self.m_string_nstop = self.make_mask(string_ids, size)
+
+    def constrained_loop(
+            self,
+            input_ids: list[int],
+            mask: torch.Tensor,
+            mask_no_stop: torch.Tensor,
+            stop: set[int],
+            max_tokens: int = 32,
+    ) -> str:
+        genereted: list[int] = []
+        tail = ""
+
+        for _ in range(max_tokens):
+            logits = torch.as_tensor(self.gen_logit_ids(input_ids + genereted))
+
+            if len(genereted) > 0:
+                activate = mask
+            else:
+                activate = mask_no_stop
+
+            best = int(torch.argmax(logits + activate))
+            if best in stop:
+                txt = self.vocabulary.text_of(best) or ""
+                tail = txt.split('"')[0] if '"' in txt else ""
+                break
+            genereted.append(best)
+
+        return self.constrained_decode(genereted) + tail
+
+    def generated_numbers(self, content: str) -> str:
+        ids = self.constrained_encode(content)
+        raw = self.constrained_loop(
+            ids,
+            self.m_number,
+            self.m_number_nstop,
+            self._number_stop,
+        ).strip()
+        try:
+            float(raw)
+        except ValueError:
+            raise ValueError(f"Invalid number: {raw!r}")
+        return raw
+
+    def generated_string(self, content: str) -> str:
+        ids = self.constrained_encode(content + ' "')
+        return self.constrained_loop(
+            ids,
+            self.m_string,
+            self.m_string_nstop,
+            self._string_stop,
+            max_tokens=32,
         )
 
     def generated_from_candidates(
@@ -30,7 +131,7 @@ class ConstrainedDecoder:
 
         # nome da função: id
         candidate_ids = {
-            candidate: self.model.encode(" " + candidate)[0].tolist()
+            candidate: self.constrained_encode(" " + candidate)
             for candidate in candidates
         }
 
@@ -67,7 +168,7 @@ class ConstrainedDecoder:
                    for ids in candidate_ids.values()):
                 break
 
-        decoded = self.model.decode(generated_ids).strip()
+        decoded = self.constrained_decode(generated_ids).strip()
         if decoded not in candidates:
             raise ValueError(f"Invalid generated candidated {decoded!r}")
 
@@ -121,7 +222,7 @@ def choose_function(
         for function in functions
     )
 
-    template = (
+    function_template = (
         "Choose the function that better fits to this prompt. \n"
         "Return only the function name. \n\n"
         "Do not solve the "
@@ -130,9 +231,78 @@ def choose_function(
         "Function name:"
     )
 
-    input_ids = decoder.model.encode(template)[0].tolist()
+    input_ids = decoder.constrained_encode(function_template)
 
     return decoder.generated_from_candidates(
         input_ids=input_ids,
         candidates=func_names,
     )
+
+
+def choose_parameters(
+        decoder: ConstrainedDecoder,
+        prompt: str,
+        function: FunctionDefinition
+        ) -> dict[str, Any]:
+
+    param_desc = "\n".join(
+        f"- {name}: {info.type}"
+        for name, info in function.parameters.items()
+    )
+
+    prefix = (
+        "<|im_start|>system\n"
+        "Extract the function arguments from the user request.\n"
+        "Copy values exactly as written in the request.\n"
+        "For regex parameters use the standard regex syntax\n"
+        "(e.g. \\d+, \\s+ for whitespaces).<|im_end|>\n"
+        "<|im_start|>user\n"
+        f"Function: {function.name}\n"
+        f"Description: {function.description}\n"
+        f"Parameters:\n{param_desc}\n"
+        f"Request: {prompt}\n"
+        "Extract only the parameter values from the request.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "JSON: {"
+    )
+
+    results: dict[str, Any] = {}
+
+    for i, (name, info) in enumerate(function.parameters.items()):
+        key = ("" if i == 0 else ", ") + f'"{name}":'
+
+        if info.type == "number":
+            raw = decoder.generated_numbers(prefix + key)
+
+            try:
+                results[name] = float(raw)
+            except ValueError:
+                raise ValueError(f"Invalid number for {name!r}: {raw!r}")
+
+            prefix += f"{key} {raw}"
+
+        elif info.type == "integer":
+            raw = decoder.generated_numbers(prefix + key)
+
+            try:
+                results[name] = int(raw)
+            except ValueError:
+                raise ValueError(f"Invalid integer for {name!r}: {raw!r}")
+
+            prefix += f"{key} {raw}"
+
+        elif info.type == "boolean":
+            raw = decoder.generated_string(prefix + key).lower()
+
+            if raw not in {"true", "false"}:
+                raise ValueError(f"Invalid boolean for {name!r}: {raw!r}")
+
+            results[name] = raw == "true"
+            prefix += f'{key} "{raw}"'
+
+        else:
+            raw = decoder.generated_string(prefix + key)
+            results[name] = raw
+            prefix += f'{key} "{raw}"'
+
+    return results
