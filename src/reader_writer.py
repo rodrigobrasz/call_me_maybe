@@ -47,7 +47,7 @@ def load_functions(path: Path) -> list[FunctionDefinition]:
 
     if not isinstance(function_data, list):
         raise InputFileError(
-            f"Expected a Json list in {path}"
+            f"Expected arepositories/call_me_maybe Json list in {path}"
         )
 
     functions: list[FunctionDefinition] = []

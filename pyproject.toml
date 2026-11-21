@@ -6,7 +6,8 @@ dependencies = [
     "llm-sdk",
     "numpy>=2.5.4",
     "pydantic>=2.14.3",
-]
+    "accelerate>=0.20.0",
+    ]
 
 [tool.uv.workspace]
 members = ["llm_sdk"]

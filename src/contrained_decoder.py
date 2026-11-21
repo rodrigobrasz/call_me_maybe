@@ -15,7 +15,33 @@ class ConstrainedDecoder:
         self.vocabulary = Vocabulary(
             model.get_path_to_vocab_file()
         )
-        self.mask_creator()
+
+    def build_mask(self, kind: str) -> str:
+        size = len(self.gen_logit_ids(self.constrained_encode("a")))
+
+        ids: set[int] = set()
+        stop: set[int] = set()
+
+        for token_id, txt in self.vocabulary.id_to_str.items():
+            if not txt:
+                continue
+
+            if kind == "number":
+                if set(txt) <= self.NUMBER_CHAR:
+                    ids.add(token_id)
+                if txt.lstrip()[:1] in (",", "}"):
+                    stop.add(token_id)
+            else:  # "string"
+                if '"' in txt:
+                    stop.add(token_id)
+                elif "\n" not in txt:
+                    ids.add(token_id)
+
+        mask = self.make_mask(ids | stop, size)
+        mask_no_stop = self.make_mask(ids, size)
+        return mask, mask_no_stop, stop
+
+        
 
     def constrained_decode(self, ids: list[int]) -> str:
         return (self.model.decode(ids))
@@ -32,73 +58,58 @@ class ConstrainedDecoder:
         mask[list(ids)] = 0.0
         return mask
 
-    def mask_creator(self) -> None:
-        vocab = self.gen_logit_ids(self.constrained_encode("a"))
-        size = len(vocab)
-
-        number_id: set[int] = set()
-        number_stop: set[int] = set()
-        string_ids: set[int] = set()
-        string_stop: set[int] = set()
-
-        for token_id, txt in self.vocabulary.id_to_str.items():
-            if not txt:
-                continue
-
-            if set(txt) <= self.NUMBER_CHAR:
-                number_id.add(token_id)
-            if txt.lstrip()[:1] in (",", "}"):
-                number_stop.add(token_id)
-
-            if '"' in txt:
-                string_stop.add(token_id)
-            elif "\n" not in txt:
-                string_ids.add(token_id)
-
-        self._number_stop = number_stop
-        self._string_stop = string_stop
-
-        self.m_number = self.make_mask(number_id | number_stop, size)
-        self.m_number_nstop = self.make_mask(number_id, size)
-        self.m_string = self.make_mask(string_ids | string_stop, size)
-        self.m_string_nstop = self.make_mask(string_ids, size)
-
     def constrained_loop(
             self,
             input_ids: list[int],
-            mask: torch.Tensor,
-            mask_no_stop: torch.Tensor,
-            stop: set[int],
+            kind: str,
             max_tokens: int = 32,
     ) -> str:
         genereted: list[int] = []
-        tail = ""
+
+        allow_stop = len(genereted) > 0
+        best, best_score = None, float("-inf")
 
         for _ in range(max_tokens):
-            logits = torch.as_tensor(self.gen_logit_ids(input_ids + genereted))
+            logits = self.gen_logit_ids(input_ids + genereted)
+            allow_stop = len(genereted) > 0
 
-            if len(genereted) > 0:
-                activate = mask
-            else:
-                activate = mask_no_stop
+            best, best_score = None, float("-inf")
+            best_is_stop = False
 
-            best = int(torch.argmax(logits + activate))
-            if best in stop:
+            for token_id, score in enumerate(torch.as_tensor(logits).tolist()):
+                txt = self.vocabulary.text_of(token_id)
+                if not txt:
+                    continue
+
+                if kind == "number":
+                    is_stop = txt.lstrip()[:1] in (",", "}")
+                    is_valid = all(c in self.NUMBER_CHAR for c in txt)
+                else:
+                    is_stop = '"' in txt
+                    is_valid = '"' not in txt and "\n" not in txt
+
+                if is_stop and not allow_stop:
+                    continue
+
+                if (is_valid or is_stop) and score > best_score:
+                    best, best_score = token_id, score
+                    best_is_stop = is_stop
+
+            if best is None:
+                break
+
+            if best_is_stop:
                 txt = self.vocabulary.text_of(best) or ""
                 tail = txt.split('"')[0] if '"' in txt else ""
                 break
+
             genereted.append(best)
 
         return self.constrained_decode(genereted) + tail
 
     def generated_numbers(self, content: str) -> str:
-        ids = self.constrained_encode(content)
-        raw = self.constrained_loop(
-            ids,
-            self.m_number,
-            self.m_number_nstop,
-            self._number_stop,
-        ).strip()
+        input_ids = self.constrained_encode(content)
+        raw = self.constrained_loop(input_ids, "number", max_tokens=32).strip()
         try:
             float(raw)
         except ValueError:
@@ -106,14 +117,8 @@ class ConstrainedDecoder:
         return raw
 
     def generated_string(self, content: str) -> str:
-        ids = self.constrained_encode(content + ' "')
-        return self.constrained_loop(
-            ids,
-            self.m_string,
-            self.m_string_nstop,
-            self._string_stop,
-            max_tokens=32,
-        )
+        input_ids = self.constrained_encode(content + ' "')
+        return self.constrained_loop(input_ids, "string", max_tokens=32)
 
     def generated_from_candidates(
             self,
@@ -129,7 +134,7 @@ class ConstrainedDecoder:
         if not candidates:
             raise ValueError("No candidates avalible")
 
-        # nome da função: id
+        # nome da funcao: id
         candidate_ids = {
             candidate: self.constrained_encode(" " + candidate)
             for candidate in candidates
